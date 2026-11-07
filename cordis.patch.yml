@@ -8,6 +8,12 @@
 # deliberately does NOT touch the profile's current default model — a fresh
 # install adds the model groups without changing what the user is currently
 # talking to.
+#
+# DSH v0.2.2-rc.1 (Loader 1.1.0 / Include 1.1.0) writes a generated id back
+# into any patch row that has none, and routes runtime edits to inserted rows
+# into the parent Include's patch. This row declares its id explicitly so the
+# enable/disable override in the profile's cordis.patch.yml addresses a stable
+# key, and so a hot update or rollback cannot leave a second anonymous row.
 - insert:
     - id: llm-workbuddy
       name: dsh-workbuddy-connect

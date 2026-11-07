@@ -66,6 +66,7 @@ window.__ModuleLoader__.load({
       sessionStale: "上游拒绝了这份凭据：桌面 App 换过会话了。点「从桌面 App 导入」重新接入，或重新登录。",
       tabGlobal: "国际版",
       tabCN: "国内版",
+      compatLine: "适配宿主",
     };
     const en = {
       title: "WorkBuddy",
@@ -116,8 +117,24 @@ window.__ModuleLoader__.load({
       sessionStale: "The upstream refused this credential — the desktop app rotated its session. Press “Import from the desktop app” again, or sign in once more.",
       tabGlobal: "Global",
       tabCN: "China",
+      compatLine: "Host build",
     };
-    const L = typeof navigator !== "undefined" && /^zh/i.test(navigator.language || "") ? zh : en;
+    /**
+     * v0.2.2-rc.1 ships six more UI languages. The card itself is written for
+     * zh / en; read the host's document language first (DSH sets <html lang>
+     * from its own language setting, which can differ from the OS locale),
+     * then the browser's language list. Anything else falls back to English
+     * rather than guessing a translation we do not have.
+     */
+    const pickLanguage = () => {
+      const candidates = [
+        typeof document !== "undefined" ? document.documentElement?.lang : undefined,
+        ...(typeof navigator !== "undefined" && Array.isArray(navigator.languages) ? navigator.languages : []),
+        typeof navigator !== "undefined" ? navigator.language : undefined,
+      ].filter(value => typeof value === "string" && value !== "")
+      return candidates.some(value => /^zh/i.test(value)) ? zh : en
+    }
+    const L = pickLanguage()
 
     const css = `
       .wb-card{border:.5px solid var(--dsw-alias-border-l2,#dedee3);border-radius:var(--dsw-radius-panel,12px);background:var(--dsw-alias-bg-layer-1,#fff);overflow:hidden}
@@ -477,7 +494,9 @@ window.__ModuleLoader__.load({
               h("span", { className: dotClass(status?.variants?.["workbuddy"]), "aria-hidden": "true" }),
               h("span", null, L.tabCN))),
           loadError && !status ? h("div", { className: "wb-error" }, loadError, " ", h("button", { type: "button", className: "wb-button", onClick: () => void load() }, L.retry)) : null,
-          status ? h(VariantSection, { provider: active, status, load, loading }) : h("div", { className: "wb-note" }, loading ? "…" : "—")) : null)
+          status ? h(VariantSection, { provider: active, status, load, loading }) : h("div", { className: "wb-note" }, loading ? "…" : "—"),
+          status?.hostContract ? h("div", { className: "wb-note" },
+            `${L.compatLine} ${status.hostContract.dsh} · Node ≥${status.hostContract.node} · pi-ai ${status.hostContract.piAi} · Cordis ${status.hostContract.cordis}`) : null) : null)
     }
 
     /**
@@ -497,6 +516,36 @@ window.__ModuleLoader__.load({
       return h("ul", {
         style: { display: "flex", flexDirection: "column", gap: 6, padding: 0, listStyle: "none" },
       }, props.renderSlot(SHARED_ITEM_SLOT, {}))
+    }
+
+    /**
+     * v0.2.2-rc.1 lets a plugin supply the navigation icon for its own
+     * settings section. The slot is `settings.section.icon`, addressed by the
+     * SAME id as the section contribution; unmatched ids never render and the
+     * shell restores its default glyph when this registration is released.
+     * Inline SVG rather than a URL: the client module has no asset route of
+     * its own, and an inline shape cannot fail to load.
+     */
+    const SHARED_ICON_SLOT = "settings.section.icon"
+
+    function WorkBuddySettingsIcon(props) {
+      const size = typeof props?.size === "number" ? props.size : 18
+      return h("svg", {
+        width: size, height: size, viewBox: "0 0 36 36", fill: "none",
+        "aria-hidden": "true", focusable: "false",
+      },
+        h("defs", null,
+          h("linearGradient", { id: "dsh-wb-icon-gradient", x1: "18", y1: "1", x2: "18", y2: "35", gradientUnits: "userSpaceOnUse" },
+            h("stop", { stopColor: "#4F86FF" }),
+            h("stop", { offset: "1", stopColor: "#2A55D0" }))),
+        h("rect", { x: "1", y: "1", width: "34", height: "34", rx: "8", fill: "url(#dsh-wb-icon-gradient)" }),
+        h("path", {
+          d: "M11 12.5A2.5 2.5 0 0 1 13.5 10h9A2.5 2.5 0 0 1 25 12.5v11a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 11 23.5v-11Z",
+          fill: "#FFFFFF", fillOpacity: "0.92",
+        }),
+        h("path", { d: "M15 16.5h6M15 20h4", stroke: "#3B6FF5", strokeWidth: "1.8", strokeLinecap: "round" }),
+        h("circle", { cx: "25.5", cy: "25.5", r: "3.2", fill: "#45D9E7" }),
+      )
     }
 
     const inject = ["slots"]
@@ -525,7 +574,33 @@ window.__ModuleLoader__.load({
               id: SHARED_ITEM_ID,
               order: 50,
             }, () => h(WorkBuddyCard)))
+            // The icon slot is declared by the settings domain base. Injecting
+            // (rather than registering at once) follows a late declaration,
+            // a re-declaration and teardown; a host that never declares it
+            // simply never runs this callback. The id check keeps two
+            // sibling connectors sharing the same section from colliding.
+            let disposeIcon
+            try {
+              disposeIcon = ctx.slots.inject(SHARED_ICON_SLOT, () => {
+                try {
+                  const taken = ctx.slots.entries(SHARED_ICON_SLOT)
+                    .some((entry) => entry.options?.id === SHARED_SECTION_ID)
+                  if (taken) return () => {}
+                  return ctx.slots.register({
+                    name: SHARED_ICON_SLOT,
+                    id: SHARED_SECTION_ID,
+                    order: 50,
+                  }, WorkBuddySettingsIcon)
+                } catch (error) {
+                  note("nav-icon-register", error)
+                  return () => {}
+                }
+              })
+            } catch (error) {
+              note("nav-icon-inject", error)
+            }
             return () => {
+              disposeIcon?.()
               disposeItem()
               disposeContainer?.()
             }

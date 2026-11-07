@@ -45,21 +45,49 @@ DSH (pi-ai)  ──OpenAI 协议──▶  127.0.0.1 shim  ──WorkBuddy 协�
 
 ## 安装
 
-前置条件：DSH 核心 `0.2.0-rc.2` 及以上；Node.js `^22.19.0 || >=24.0.0`。
+> **本分支适配 DSH `v0.2.2-rc.1`。** 上游原仓库面向 `0.2.0-rc.2` 及以上，其 `engines` / peer 声明、pi-ai profile 字段与客户端设置页契约都停留在 0.2.1 时代；本目录是按 0.2.2-rc.1 的宿主接口改造后的版本，见下方「0.2.2-rc.1 适配说明」。
+
+前置条件：DSH 核心 **`0.2.2-rc.1`**（`^0.2.2-rc.1`）；**Node.js `>=24.9.0`**（0.2.2-rc.1 把宿主最低运行时从 22 提到 24.9，旧版 Node 会直接被启动检查拒绝）。
 
 ```sh
-# 从 GitHub 安装（推荐）
-dsh plugin --profile web add github:sixzjd/dsh-workbuddy-connect
+# 从 GitHub 安装（把 <owner>/<repo> 换成你的仓库地址）
+dsh plugin --profile web add github:<owner>/<repo>
 
 # 从本地目录安装（开发用）
-dsh plugin --profile web add "file:/绝对路径/接入workbuddy"
+dsh plugin --profile web add "file:/绝对路径/dsh-workbuddy-connect-0.2.2-rc.1"
+
+# 开发时把依赖写成 link:，改动即时生效
+# "dsh-workbuddy-connect": "link:/绝对路径/dsh-workbuddy-connect-0.2.2-rc.1"
 ```
 
-> **别用 `add dsh-workbuddy-connect`。** npm 上这个名字**已被另一个插件占用**——`dsh-workbuddy-connect@0.7.9`（作者 `corrinehu`，2026-10-20 发布），那是另一套实现，装到的是它而不是本仓库。本插件只在 GitHub 上分发，安装请写全 `github:sixzjd/`。
+> GitHub 属于 git spec：插件管理器会**先抓取仓库、安装后才判定版本兼容性**。若宿主不是 `^0.2.2-rc.1`，它会恢复 profile 清单与锁文件并报 `incompatible-version`；这是预期行为，不是安装脚本坏了。
+
+> **别用 `add dsh-workbuddy-connect`。** npm 上这个名字**已被另一个插件占用**——`dsh-workbuddy-connect@0.7.9`（作者 `corrinehu`，2026-10-20 发布），那是另一套实现，装到的是它而不是本仓库。原版在 `github:sixzjd/`；这个 0.2.2-rc.1 适配分支按上面的 `github:` / `file:` / `link:` 之一安装即可，别用裸包名。
 
 按你使用的 profile 换 `--profile` 的值（`web` / `desktop` / `tui`）。装到哪个 profile，数据就落在哪个 profile 目录里，web / desktop / tui 各自独立。
 
 > **装完要重启 DSH。** 插件是启动时按 `package.json → dsh.profile.bundles` 装载的，热重载只覆盖 client 侧的模块，不覆盖 bundle 本身。
+
+## 0.2.2-rc.1 适配说明
+
+对照官方 `dsh-v0.2.2-rc.1` 发布说明、`@deepseek-ai/dsh-llm-pi-ai@0.2.2-rc.1` / `pi-ai@1.3.0` / `cordis@4.1.0` 的类型与运行时，以及仓库自带的 `docs/upgrade-guide/v0.2.2-alpha.2/*`，逐项做了如下改造：
+
+| 宿主变化（0.2.2-rc.1） | 本插件的改法 |
+|---|---|
+| Node.js 最低版本提高到 **24.9**，pi-ai 升级到 **1.3.0**，Cordis **4.1.0** / Loader **1.1.0** | `engines.node` 改为 `>=24.9.0`，`engines.dsh` 与两个 DSH peer 收紧为 `^0.2.2-rc.1`，pi-ai peer 改为 `^1.3.0`；补充 `dsh.manifestVersion: 1` |
+| 未声明容量的自定义模型默认从 262144 / 32768 改成 **十进制 1M / 128K**，官方明确要求「较小端点应显式覆盖容量」 | 新增 `lib/compat.js`，显式声明 `defaultContextWindow` / `defaultMaxTokens` 为原来的保守值；`toPiModel()` 经 `capacityOf()` 兜底，任何缺失/非法容量都回落到该值，避免 WorkBuddy 的小窗口被报成 1M 而延迟压缩 |
+| pi-ai 路由新增 `maxRequestImages`（默认 50）与 `imageOffloadCountQuantum`（默认 10），长会话超限时省略最老图片 | 手写的 `ResolvedPiAiProviderProfile` 补齐这两个字段（此前只有字节/像素预算，等于没有数量上限） |
+| `PiAiAdapter` 新增 `prepareHeaders` 钩子：按会话与请求用途准备请求头，无效头在发出前报错 | 接入 `prepareWorkBuddyHeaders()`，剔除可能覆盖回环 shim 共享密钥的 `authorization` / `cf-aig-authorization`；pi-ai 把 `headers` 最后合并，一个同名头会顶掉 `apiKey` 派生的 Bearer |
+| 插件可为自己的设置页面提供**导航图标**（`settings.section.icon`，按 section id 匹配，卸载后恢复默认） | `client.js` 注入该 slot，用内联 SVG 注册与 `plugin-settings` 同 id 的图标；带重复 id 检测与异常兜底，多个社区连接器共用同一 section 不会互相撞车 |
+| 新增日 / 西 / 法 / 德 / 俄 / 巴西葡六种界面语言，插件详情页读 `locale/<lang>.json` | 补齐六个 locale 文件；卡片的 zh / en 判定改为优先读宿主的 `<html lang>`，再回退 `navigator.languages`，其余语言统一落英文而不是猜 |
+| Loader 1.1.0 把生成的 id 写回无 id 的 patch 行；Include 把插入行的运行时修改写进父 patch | `cordis.patch.yml` 的 insert 行继续显式带 `id: llm-workbuddy`，保证 profile 里的启停覆盖项命中稳定键 |
+| 插件管理页支持富文本详情、第三方包更新与失败回滚 | 清单补齐 `dsh.manifestVersion`、`icon`、`exports` 与本地化 `meta`，详情页沿用 `README.md` 作为文档来源 |
+
+另外修掉一处与版本无关的潜在崩溃：`lib/shim.js` 的 `relayStream()` 在上游流中断时引用了不在其作用域内的 `options.logger`，会在 `catch` 里抛 `ReferenceError`；现在由工厂把 `logger` 显式传入。
+
+已核验**没有**踩到其他破坏性迁移：本插件不构造辅助 LLM 请求（不涉及 `LlmRequestPurposeMap`）、不注册 Session Projection（不涉及异步注册）、不挂 `agent/request` 改路由（不涉及 `agent.model`）、不实现 `tools.resolve/executable`（不涉及按步骤启用工具），也不接 PTC / SSH 协议。`window.__ModuleLoader__.load()`、`ctx.slots.register/inject/entries`、`ctx.llm.registerAdapter/registerConfigurableProviders`、`ctx.fiber.entry.options.id`、`webServer.register({kind:'exact'})` 在 0.2.2-rc.1 均保持原契约。
+
+设置卡片底部会显示一行 `适配宿主 0.2.2-rc.1 · Node ≥24.9.0 · pi-ai 1.3.0 · Cordis 4.1.0`，用来确认装进来的确实是这一版。
 
 ## 使用
 
@@ -150,7 +178,10 @@ dsh plugin --profile web add "file:/绝对路径/接入workbuddy"
 ## 开发
 
 ```sh
-node test/smoke.mjs     # 纯逻辑的回归用例（目录解析、请求改写、额度归一、错误分类、加密信封）
+npm test                              # 两套一起跑
+node test/smoke.mjs                   # 纯逻辑回归（目录解析、请求改写、额度归一、错误分类、加密信封）
+node test/compat-0.2.2-rc.1.mjs       # 0.2.2-rc.1 宿主契约检查（无需安装 DSH 即可运行）
+npm run test:integration              # 可选：用真实的 0.2.2-rc.1 宿主包装载适配器；缺依赖时自动跳过
 ```
 
 插件本身是**纯 ESM JavaScript，无构建步骤**。

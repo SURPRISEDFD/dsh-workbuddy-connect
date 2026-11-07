@@ -45,21 +45,49 @@ DSH (pi-ai)  ──OpenAI──▶  127.0.0.1 shim  ──WorkBuddy──▶  ga
 
 ## Install
 
-Requires DSH core `0.2.0-rc.2` or newer, and Node.js `^22.19.0 || >=24.0.0`.
+> **This checkout is adapted to DSH `v0.2.2-rc.1`.** The upstream repository targets `0.2.0-rc.2+`; its engine/peer declarations, hand-built pi-ai profiles and client settings contract all predate 0.2.2. See "0.2.2-rc.1 adaptation" below.
+
+Requires DSH core **`0.2.2-rc.1`** (`^0.2.2-rc.1`) and **Node.js `>=24.9.0`** — 0.2.2-rc.1 raised the host's minimum runtime from 22 to 24.9, and the startup check rejects older Node.js.
 
 ```sh
-# install from GitHub (recommended)
-dsh plugin --profile web add github:sixzjd/dsh-workbuddy-connect
+# install from GitHub (replace <owner>/<repo> with your repository)
+dsh plugin --profile web add github:<owner>/<repo>
 
 # from a local checkout (development)
-dsh plugin --profile web add "file:/absolute/path/接入workbuddy"
+dsh plugin --profile web add "file:/absolute/path/dsh-workbuddy-connect-0.2.2-rc.1"
+
+# for development, link: instead so edits take effect on reload
+# "dsh-workbuddy-connect": "link:/absolute/path/dsh-workbuddy-connect-0.2.2-rc.1"
 ```
 
-> **Do not use `add dsh-workbuddy-connect`.** That npm name is **taken by a different plugin** — `dsh-workbuddy-connect@0.7.9` (author `corrinehu`, published 2026-10-20) is a separate implementation, so the bare name installs it, not this repository. This connector is distributed on GitHub only; always spell out `github:sixzjd/`.
+> A GitHub spec is fetched before the compatibility check: the plugin manager installs first, then validates `engines.dsh` / DSH peers. On a host outside `^0.2.2-rc.1` it restores the profile manifest and lockfile and reports `incompatible-version`. That is expected, not a broken install.
+
+> **Do not use `add dsh-workbuddy-connect`.** That npm name is **taken by a different plugin** — `dsh-workbuddy-connect@0.7.9` (author `corrinehu`, published 2026-10-20) is a separate implementation, so the bare name installs it, not this repository. The upstream connector lives at `github:sixzjd/`; install this 0.2.2-rc.1 adaptation with any of the `github:` / `file:` / `link:` forms above, never the bare npm name.
 
 Swap `--profile` for the profile you use (`web` / `desktop` / `tui`). The data lands in that profile's directory; web, desktop and tui stay independent.
 
 > **Restart DSH after installing.** A plugin is loaded at boot from `package.json → dsh.profile.bundles`; the hot-reload receiver covers client modules, not the bundle itself.
+
+## 0.2.2-rc.1 adaptation
+
+Verified against the official `dsh-v0.2.2-rc.1` release notes, the types and runtime of `@deepseek-ai/dsh-llm-pi-ai@0.2.2-rc.1`, `pi-ai@1.3.0` and `cordis@4.1.0`, plus the repository's own `docs/upgrade-guide/v0.2.2-alpha.2/*` migration guides.
+
+| Host change (0.2.2-rc.1) | What changed here |
+|---|---|
+| Node.js minimum raised to **24.9**; pi-ai **1.3.0**; Cordis **4.1.0** / Loader **1.1.0** | `engines.node` → `>=24.9.0`; `engines.dsh` and both DSH peers → `^0.2.2-rc.1`; pi-ai peer → `^1.3.0`; `dsh.manifestVersion: 1` added |
+| Undeclared custom-model capacities changed from 262144 / 32768 to **decimal 1M / 128K**; the release notes require smaller endpoints to declare explicit capacities | New `lib/compat.js` declares conservative `defaultContextWindow` / `defaultMaxTokens`; `toPiModel()` uses `capacityOf()` so a missing or invalid capacity never inherits 1M and delays compaction past WorkBuddy's real token ceiling |
+| pi-ai routes gained `maxRequestImages` (50) and `imageOffloadCountQuantum` (10) to offload the oldest images in long sessions | The hand-built `ResolvedPiAiProviderProfile` now sets both; previously only byte/pixel budgets existed, so the route had no count bound at all |
+| `PiAiAdapter` gained `prepareHeaders` — per-session/purpose headers, with invalid headers failing before dispatch | `prepareWorkBuddyHeaders()` removes `authorization` / `cf-aig-authorization`; pi-ai merges headers last, so either name would shadow the loopback shim's `apiKey`-derived bearer |
+| Plugins can supply a **settings navigation icon** through `settings.section.icon`, matched by section id, restored on unload | `client.js` injects that slot with an inline SVG registered under the same `plugin-settings` id; a duplicate-id guard and error fallback keep sibling connectors sharing the section from colliding |
+| Six new UI languages; the plugin detail page reads `locale/<lang>.json` | Six locale files added; the card's zh/en choice now prefers the host's `<html lang>`, then `navigator.languages`, falling back to English for the rest |
+| Loader 1.1.0 writes generated ids back to patch rows without one | `cordis.patch.yml` keeps its explicit `id: llm-workbuddy`, so profile enable/disable overrides address a stable key |
+| Rich-text plugin details, third-party updates and rollback | Manifest now carries `manifestVersion`, `icon`, `exports` and localized `meta`; the detail page keeps using `README.md` |
+
+Also fixed a version-independent latent crash: `relayStream()` in `lib/shim.js` referenced `options.logger`, which is out of scope there, turning a recoverable mid-stream failure into a `ReferenceError` inside the catch block. The factory now passes `logger` explicitly.
+
+Confirmed **not** affected by the other breaking migrations: this connector builds no auxiliary LLM requests (`LlmRequestPurposeMap`), registers no Session Projection (async registration), never changes routing from `agent/request` (`agent.model`), implements no `tools.resolve/executable`, and uses neither PTC nor the SSH protocol. `window.__ModuleLoader__.load()`, `ctx.slots.register/inject/entries`, `ctx.llm.registerAdapter/registerConfigurableProviders`, `ctx.fiber.entry.options.id` and `webServer.register({kind:'exact'})` all keep their contracts in 0.2.2-rc.1.
+
+The card shows `Host build 0.2.2-rc.1 · Node ≥24.9.0 · pi-ai 1.3.0 · Cordis 4.1.0` at the bottom so the installed generation is visible.
 
 ## Use
 
@@ -128,7 +156,10 @@ The plugin therefore rewrites that sentence to "You are an AI coding assistant."
 ## Development
 
 ```sh
-node test/smoke.mjs     # regression cases for the pure logic
+npm test                              # both suites
+node test/smoke.mjs                   # regression cases for the pure logic
+node test/compat-0.2.2-rc.1.mjs       # host-contract checks, no DSH install needed
+npm run test:integration              # optional: real 0.2.2-rc.1 host packages; skips when absent
 ```
 
 The plugin is **plain ESM JavaScript with no build step**.
